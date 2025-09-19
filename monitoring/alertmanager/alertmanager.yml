@@ -1,0 +1,255 @@
+global:
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_from: 'alerts@camera-streaming.example.com'
+  smtp_auth_username: 'alerts@camera-streaming.example.com'
+  smtp_auth_password_file: '/etc/alertmanager/smtp-password'
+  slack_api_url_file: '/etc/alertmanager/slack-webhook'
+
+# Templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route tree for alerts
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default'
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 0s
+      repeat_interval: 5m
+      routes:
+        - match:
+            team: platform
+          receiver: 'platform-critical'
+        - match:
+            team: streaming
+          receiver: 'streaming-critical'
+        - match:
+            team: security
+          receiver: 'security-critical'
+
+    # Warning alerts - standard notification
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      routes:
+        - match:
+            team: platform
+          receiver: 'platform-warnings'
+        - match:
+            team: streaming
+          receiver: 'streaming-warnings'
+        - match:
+            team: operations
+          receiver: 'operations-warnings'
+        - match:
+            team: security
+          receiver: 'security-warnings'
+
+    # Maintenance window - suppress alerts
+    - match:
+        alertname: 'MaintenanceMode'
+      receiver: 'null'
+
+    # Development environment - reduced noise
+    - match:
+        environment: 'development'
+      receiver: 'dev-alerts'
+      group_interval: 5m
+      repeat_interval: 12h
+
+# Inhibition rules to reduce noise
+inhibit_rules:
+  # Inhibit warning alerts when critical alerts are firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+
+  # Inhibit individual service alerts when the whole service is down
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match_re:
+      alertname: '(HighErrorRate|HighResponseTime|DatabaseDown|RedisDown)'
+    equal: ['instance']
+
+  # Inhibit pod alerts when node is down
+  - source_match:
+      alertname: 'NodeDown'
+    target_match_re:
+      alertname: '(PodNotReady|PodCrashLooping)'
+    equal: ['node']
+
+# Receivers define how to send notifications
+receivers:
+  - name: 'default'
+    slack_configs:
+      - channel: '#alerts'
+        title: 'Camera Streaming Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        send_resolved: true
+
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'oncall@camera-streaming.example.com'
+        subject: '🚨 CRITICAL: {{ .GroupLabels.alertname }} - Camera Streaming'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Service: {{ .Labels.service }}
+          Instance: {{ .Labels.instance }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+        headers:
+          Priority: 'high'
+    slack_configs:
+      - channel: '#critical-alerts'
+        title: '🚨 CRITICAL ALERT'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          
+          *Service:* {{ .Labels.service }}
+          *Instance:* {{ .Labels.instance }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        send_resolved: true
+        color: 'danger'
+    pagerduty_configs:
+      - routing_key_file: '/etc/alertmanager/pagerduty-key'
+        description: '{{ .GroupLabels.alertname }} - Camera Streaming'
+        details:
+          summary: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+          service: '{{ .GroupLabels.service }}'
+          severity: '{{ .GroupLabels.severity }}'
+
+  - name: 'platform-critical'
+    email_configs:
+      - to: 'platform-team@camera-streaming.example.com'
+        subject: '🚨 PLATFORM CRITICAL: {{ .GroupLabels.alertname }}'
+        body: |
+          Platform Critical Alert
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Instance: {{ .Labels.instance }}
+          Time: {{ .StartsAt }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+    slack_configs:
+      - channel: '#platform-alerts'
+        title: '🚨 Platform Critical Alert'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          
+          *Instance:* {{ .Labels.instance }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        color: 'danger'
+
+  - name: 'streaming-critical'
+    email_configs:
+      - to: 'streaming-team@camera-streaming.example.com'
+        subject: '🚨 STREAMING CRITICAL: {{ .GroupLabels.alertname }}'
+    slack_configs:
+      - channel: '#streaming-alerts'
+        title: '🚨 Streaming Critical Alert'
+        color: 'danger'
+
+  - name: 'security-critical'
+    email_configs:
+      - to: 'security-team@camera-streaming.example.com'
+        subject: '🚨 SECURITY CRITICAL: {{ .GroupLabels.alertname }}'
+    slack_configs:
+      - channel: '#security-alerts'
+        title: '🚨 Security Critical Alert'
+        color: 'danger'
+
+  - name: 'warning-alerts'
+    slack_configs:
+      - channel: '#alerts'
+        title: '⚠️ Warning Alert'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          
+          *Service:* {{ .Labels.service }}
+          *Instance:* {{ .Labels.instance }}
+          {{ end }}
+        send_resolved: true
+        color: 'warning'
+
+  - name: 'platform-warnings'
+    slack_configs:
+      - channel: '#platform-alerts'
+        title: '⚠️ Platform Warning'
+        color: 'warning'
+
+  - name: 'streaming-warnings'
+    slack_configs:
+      - channel: '#streaming-alerts'
+        title: '⚠️ Streaming Warning'
+        color: 'warning'
+
+  - name: 'operations-warnings'
+    slack_configs:
+      - channel: '#operations-alerts'
+        title: '⚠️ Operations Warning'
+        color: 'warning'
+
+  - name: 'security-warnings'
+    slack_configs:
+      - channel: '#security-alerts'
+        title: '⚠️ Security Warning'
+        color: 'warning'
+
+  - name: 'dev-alerts'
+    slack_configs:
+      - channel: '#dev-alerts'
+        title: '🔧 Development Alert'
+        color: 'good'
+
+  - name: 'null'
+    # Null receiver for suppressed alerts
+
+# Time-based silencing
+time_intervals:
+  - name: 'maintenance-window'
+    time_intervals:
+      - times:
+          - start_time: '02:00'
+            end_time: '04:00'
+        weekdays: ['sunday']
+        months: ['1:12']
+
+  - name: 'business-hours'
+    time_intervals:
+      - times:
+          - start_time: '09:00'
+            end_time: '17:00'
+        weekdays: ['monday:friday']
+
+  - name: 'off-hours'
+    time_intervals:
+      - times:
+          - start_time: '17:00'
+            end_time: '09:00'
+        weekdays: ['monday:friday']
+      - times:
+          - start_time: '00:00'
+            end_time: '23:59'
+        weekdays: ['saturday', 'sunday']

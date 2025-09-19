@@ -1,0 +1,181 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: camera-streaming-config
+  namespace: camera-streaming
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  
+  # Database Configuration
+  DATABASE_TYPE: "postgres"
+  DATABASE_HOST: "postgres-service"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "camera_streaming"
+  DATABASE_SYNCHRONIZE: "false"
+  DATABASE_LOGGING: "false"
+  
+  # Redis Configuration
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  
+  # RTMP Configuration
+  RTMP_BASE_URL: "rtmp://nginx-rtmp-service/live"
+  RTMP_PORT: "1935"
+  
+  # JWT Configuration
+  JWT_EXPIRES_IN: "24h"
+  
+  # Rate Limiting
+  RATE_LIMIT_WINDOW: "900000"
+  RATE_LIMIT_MAX: "1000"
+  
+  # File Upload
+  MAX_FILE_SIZE: "100MB"
+  UPLOAD_DEST: "/app/uploads"
+  
+  # Logging
+  LOG_LEVEL: "info"
+  LOG_DIRECTORY: "/app/logs"
+  
+  # Monitoring
+  METRICS_ENABLED: "true"
+  HEALTH_CHECK_INTERVAL: "30000"
+  
+  # Security
+  ALLOWED_COUNTRIES: "US,CA,GB,AU,DE,FR,JP"
+  BLOCKED_COUNTRIES: ""
+  
+  # Storage
+  STORAGE_TYPE: "local"
+  STORAGE_PATH: "/app/storage"
+  
+  # Recording
+  RECORDING_SEGMENT_DURATION: "3600"
+  RECORDING_RETENTION_DAYS: "30"
+  
+  # Streaming
+  HLS_SEGMENT_DURATION: "10"
+  HLS_PLAYLIST_LENGTH: "6"
+  
+  # External Services
+  EXTERNAL_LOGGING_URL: ""
+  WEBHOOK_URL: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-rtmp-config
+  namespace: camera-streaming
+data:
+  nginx.conf: |
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+
+    rtmp {
+        server {
+            listen 1935;
+            chunk_size 4096;
+            allow publish all;
+            allow play all;
+
+            application live {
+                live on;
+                record off;
+                
+                # HLS Configuration
+                hls on;
+                hls_path /tmp/hls;
+                hls_fragment 3s;
+                hls_playlist_length 60s;
+                
+                # Authentication callback
+                on_publish http://camera-streaming-backend:3000/streaming/auth;
+                on_publish_done http://camera-streaming-backend:3000/streaming/publish-done;
+                
+                # Recording
+                record all;
+                record_path /recordings;
+                record_unique on;
+                record_suffix .flv;
+                
+                # Transcoding for multiple bitrates
+                exec ffmpeg -i rtmp://localhost/live/$name
+                  -c:v libx264 -c:a aac -b:v 1000k -b:a 128k -vf "scale=1280:720" -f flv rtmp://localhost/hls/$name_720p
+                  -c:v libx264 -c:a aac -b:v 500k -b:a 64k -vf "scale=854:480" -f flv rtmp://localhost/hls/$name_480p
+                  -c:v libx264 -c:a aac -b:v 250k -b:a 32k -vf "scale=640:360" -f flv rtmp://localhost/hls/$name_360p;
+            }
+            
+            application hls {
+                live on;
+                hls on;
+                hls_path /tmp/hls;
+                hls_fragment 3s;
+                hls_playlist_length 60s;
+                hls_variant _720p BANDWIDTH=1128000;
+                hls_variant _480p BANDWIDTH=564000;
+                hls_variant _360p BANDWIDTH=282000;
+            }
+        }
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+
+        access_log /var/log/nginx/access.log main;
+
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+
+        server {
+            listen 8080;
+            server_name _;
+
+            location /hls {
+                types {
+                    application/vnd.apple.mpegurl m3u8;
+                    video/mp2t ts;
+                }
+                root /tmp;
+                add_header Cache-Control no-cache;
+                add_header Access-Control-Allow-Origin *;
+                add_header Access-Control-Allow-Methods GET,POST,OPTIONS;
+                add_header Access-Control-Allow-Headers DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range;
+            }
+
+            location /stat {
+                rtmp_stat all;
+                rtmp_stat_stylesheet stat.xsl;
+            }
+
+            location /stat.xsl {
+                root /etc/nginx;
+            }
+
+            location /control {
+                rtmp_control all;
+            }
+
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }

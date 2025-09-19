@@ -1,0 +1,251 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        # Get the previous tag
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+        
+        if [ -z "$PREVIOUS_TAG" ]; then
+          # First release
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+        else
+          # Generate changelog since last tag
+          CHANGELOG=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+        fi
+        
+        # Save changelog to file
+        echo "$CHANGELOG" > CHANGELOG.md
+        
+        # Set output for GitHub release
+        echo "changelog<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        body: |
+          ## Changes in this Release
+          
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ## Docker Images
+          
+          - Backend: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.ref_name }}`
+          
+          ## Deployment
+          
+          This release has been automatically deployed to production.
+          
+          ## Verification
+          
+          - [ ] API Health Check: https://api.camera-streaming.example.com/health
+          - [ ] Streaming Health: https://streaming.camera-streaming.example.com/health
+          - [ ] Monitoring Dashboard: https://monitoring.camera-streaming.example.com
+          
+        draft: false
+        prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+
+  build-release-images:
+    name: Build Release Images
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract version
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "major=$(echo ${VERSION} | cut -d. -f1)" >> $GITHUB_OUTPUT
+        echo "minor=$(echo ${VERSION} | cut -d. -f1-2)" >> $GITHUB_OUTPUT
+
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ steps.version.outputs.version }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ steps.version.outputs.minor }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ steps.version.outputs.major }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:latest
+        labels: |
+          org.opencontainers.image.title=Camera Streaming Backend
+          org.opencontainers.image.description=Multi-Camera RTMP Streaming Platform Backend
+          org.opencontainers.image.version=${{ steps.version.outputs.version }}
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.created=${{ steps.date.outputs.date }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  security-scan-release:
+    name: Security Scan Release
+    runs-on: ubuntu-latest
+    needs: [build-release-images]
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.ref_name }}'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Check for critical vulnerabilities
+      run: |
+        # Fail if critical vulnerabilities are found
+        CRITICAL_COUNT=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy image --severity CRITICAL --format json \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.ref_name }} | \
+          jq '.Results[]?.Vulnerabilities // [] | length')
+        
+        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+          echo "❌ Found $CRITICAL_COUNT critical vulnerabilities"
+          exit 1
+        else
+          echo "✅ No critical vulnerabilities found"
+        fi
+
+  update-helm-chart:
+    name: Update Helm Chart
+    runs-on: ubuntu-latest
+    needs: [build-release-images]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Extract version
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Update Helm chart
+      run: |
+        # Update Chart.yaml
+        sed -i "s/version: .*/version: ${{ steps.version.outputs.version }}/" helm/camera-streaming/Chart.yaml
+        sed -i "s/appVersion: .*/appVersion: ${{ steps.version.outputs.version }}/" helm/camera-streaming/Chart.yaml
+        
+        # Update values.yaml with new image tag
+        sed -i "s/tag: .*/tag: ${{ steps.version.outputs.version }}/" helm/camera-streaming/values.yaml
+
+    - name: Package Helm chart
+      run: |
+        helm package helm/camera-streaming --destination helm-packages/
+
+    - name: Upload Helm chart
+      uses: actions/upload-artifact@v3
+      with:
+        name: helm-chart
+        path: helm-packages/*.tgz
+
+  notify-teams:
+    name: Notify Teams
+    runs-on: ubuntu-latest
+    needs: [create-release, build-release-images, security-scan-release]
+    if: always()
+    
+    steps:
+    - name: Notify Slack on Success
+      if: needs.create-release.result == 'success' && needs.build-release-images.result == 'success' && needs.security-scan-release.result == 'success'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        channel: '#releases'
+        text: |
+          🎉 New release published: ${{ github.ref_name }}
+          
+          📦 Docker Images:
+          - Backend: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.ref_name }}`
+          
+          🔗 Links:
+          - Release Notes: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          - Production: https://api.camera-streaming.example.com
+          
+          🚀 Deployment to production will start automatically.
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Notify Slack on Failure
+      if: needs.create-release.result == 'failure' || needs.build-release-images.result == 'failure' || needs.security-scan-release.result == 'failure'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        channel: '#releases'
+        text: |
+          ❌ Release ${{ github.ref_name }} failed
+          
+          Please check the GitHub Actions logs for details.
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Send email notification
+      if: needs.create-release.result == 'success'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ secrets.SMTP_SERVER }}
+        server_port: ${{ secrets.SMTP_PORT }}
+        username: ${{ secrets.SMTP_USERNAME }}
+        password: ${{ secrets.SMTP_PASSWORD }}
+        subject: 'New Release: Camera Streaming Platform ${{ github.ref_name }}'
+        to: ${{ secrets.RELEASE_NOTIFICATION_EMAIL }}
+        from: 'Camera Streaming Platform <noreply@camera-streaming.example.com>'
+        body: |
+          A new version of the Camera Streaming Platform has been released.
+          
+          Version: ${{ github.ref_name }}
+          Release Notes: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          
+          The new version is being deployed to production automatically.
+          
+          Production URL: https://api.camera-streaming.example.com
+          Monitoring: https://monitoring.camera-streaming.example.com
+          
+          Best regards,
+          Camera Streaming Platform Team

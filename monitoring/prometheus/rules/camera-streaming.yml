@@ -1,0 +1,316 @@
+groups:
+  - name: camera-streaming.rules
+    interval: 30s
+    rules:
+      # High-level service availability
+      - alert: ServiceDown
+        expr: up{job="camera-streaming-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Camera Streaming service is down"
+          description: "Camera Streaming backend service has been down for more than 1 minute on instance {{ $labels.instance }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/service-down"
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{job="camera-streaming-backend",status=~"5.."}[5m]) /
+            rate(http_requests_total{job="camera-streaming-backend"}[5m])
+          ) * 100 > 5
+        for: 3m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }}% for the last 5 minutes on {{ $labels.instance }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/high-error-rate"
+
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="camera-streaming-backend"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s on {{ $labels.instance }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/high-response-time"
+
+      # System resource alerts
+      - alert: HighCPUUsage
+        expr: system_cpu_usage > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/high-cpu"
+
+      - alert: HighMemoryUsage
+        expr: system_memory_usage > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/high-memory"
+
+      - alert: HighDiskUsage
+        expr: system_disk_usage > 90
+        for: 2m
+        labels:
+          severity: critical
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is {{ $value }}% on {{ $labels.instance }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/high-disk"
+
+      # Database alerts
+      - alert: DatabaseDown
+        expr: service_health{service="database"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Database is down"
+          description: "PostgreSQL database is not responding"
+          runbook_url: "https://runbooks.camera-streaming.example.com/database-down"
+
+      - alert: DatabaseHighConnections
+        expr: pg_stat_database_numbackends / pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "High database connections"
+          description: "Database connection usage is {{ $value }}%"
+          runbook_url: "https://runbooks.camera-streaming.example.com/database-connections"
+
+      - alert: DatabaseSlowQueries
+        expr: rate(pg_stat_database_tup_fetched[5m]) / rate(pg_stat_database_tup_returned[5m]) < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Database slow queries detected"
+          description: "Database query efficiency is low: {{ $value }}"
+          runbook_url: "https://runbooks.camera-streaming.example.com/slow-queries"
+
+      # Redis alerts
+      - alert: RedisDown
+        expr: service_health{service="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache service is not responding"
+          runbook_url: "https://runbooks.camera-streaming.example.com/redis-down"
+
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value }}%"
+          runbook_url: "https://runbooks.camera-streaming.example.com/redis-memory"
+
+      # RTMP streaming alerts
+      - alert: RTMPServiceDown
+        expr: service_health{service="rtmp"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: camera-streaming
+          team: streaming
+        annotations:
+          summary: "RTMP service is down"
+          description: "NGINX RTMP service is not responding"
+          runbook_url: "https://runbooks.camera-streaming.example.com/rtmp-down"
+
+      - alert: HighStreamFailureRate
+        expr: |
+          (
+            rate(nginx_rtmp_connections_failed_total[5m]) /
+            rate(nginx_rtmp_connections_total[5m])
+          ) * 100 > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: streaming
+        annotations:
+          summary: "High stream failure rate"
+          description: "Stream failure rate is {{ $value }}%"
+          runbook_url: "https://runbooks.camera-streaming.example.com/stream-failures"
+
+      # Camera-specific alerts
+      - alert: TooManyCamerasOffline
+        expr: (cameras_total - cameras_online) / cameras_total * 100 > 20
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: operations
+        annotations:
+          summary: "Too many cameras offline"
+          description: "{{ $value }}% of cameras are offline"
+          runbook_url: "https://runbooks.camera-streaming.example.com/cameras-offline"
+
+      - alert: RecordingFailures
+        expr: rate(recording_failures_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: operations
+        annotations:
+          summary: "Recording failures detected"
+          description: "Recording failure rate is {{ $value }} per second"
+          runbook_url: "https://runbooks.camera-streaming.example.com/recording-failures"
+
+      # Kubernetes alerts
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Pod is crash looping"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is restarting frequently"
+          runbook_url: "https://runbooks.camera-streaming.example.com/pod-crash-loop"
+
+      - alert: PodNotReady
+        expr: kube_pod_status_ready{condition="false"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Pod not ready"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is not ready"
+          runbook_url: "https://runbooks.camera-streaming.example.com/pod-not-ready"
+
+      - alert: DeploymentReplicasMismatch
+        expr: kube_deployment_status_replicas != kube_deployment_status_replicas_available
+        for: 10m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Deployment replicas mismatch"
+          description: "Deployment {{ $labels.deployment }} has {{ $labels.replicas }} desired but {{ $labels.replicas_available }} available"
+          runbook_url: "https://runbooks.camera-streaming.example.com/deployment-replicas"
+
+      # Storage alerts
+      - alert: PersistentVolumeUsageHigh
+        expr: |
+          (
+            kubelet_volume_stats_used_bytes /
+            kubelet_volume_stats_capacity_bytes
+          ) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: platform
+        annotations:
+          summary: "Persistent volume usage high"
+          description: "PV {{ $labels.persistentvolumeclaim }} usage is {{ $value }}%"
+          runbook_url: "https://runbooks.camera-streaming.example.com/pv-usage"
+
+      # Security alerts
+      - alert: UnauthorizedAPIAccess
+        expr: rate(http_requests_total{status="401"}[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: security
+        annotations:
+          summary: "High rate of unauthorized API access"
+          description: "Unauthorized access rate is {{ $value }} per second"
+          runbook_url: "https://runbooks.camera-streaming.example.com/unauthorized-access"
+
+      - alert: RateLimitExceeded
+        expr: rate(http_requests_total{status="429"}[5m]) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          service: camera-streaming
+          team: security
+        annotations:
+          summary: "Rate limit exceeded frequently"
+          description: "Rate limit exceeded {{ $value }} times per second"
+          runbook_url: "https://runbooks.camera-streaming.example.com/rate-limit"
+
+  - name: camera-streaming.recording
+    interval: 60s
+    rules:
+      # Recording rules for aggregated metrics
+      - record: camera_streaming:request_rate_5m
+        expr: rate(http_requests_total{job="camera-streaming-backend"}[5m])
+
+      - record: camera_streaming:error_rate_5m
+        expr: |
+          rate(http_requests_total{job="camera-streaming-backend",status=~"5.."}[5m]) /
+          rate(http_requests_total{job="camera-streaming-backend"}[5m])
+
+      - record: camera_streaming:response_time_p95_5m
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="camera-streaming-backend"}[5m]))
+
+      - record: camera_streaming:response_time_p99_5m
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="camera-streaming-backend"}[5m]))
+
+      - record: camera_streaming:cpu_usage_avg_5m
+        expr: avg(system_cpu_usage) by (instance)
+
+      - record: camera_streaming:memory_usage_avg_5m
+        expr: avg(system_memory_usage) by (instance)
+
+      - record: camera_streaming:cameras_offline_percentage
+        expr: (cameras_total - cameras_online) / cameras_total * 100
+
+      - record: camera_streaming:stream_success_rate_5m
+        expr: |
+          (
+            rate(nginx_rtmp_connections_total[5m]) -
+            rate(nginx_rtmp_connections_failed_total[5m])
+          ) / rate(nginx_rtmp_connections_total[5m])
+
+      - record: camera_streaming:database_connection_usage
+        expr: pg_stat_database_numbackends / pg_settings_max_connections * 100
+
+      - record: camera_streaming:redis_memory_usage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100

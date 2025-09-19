@@ -1,0 +1,88 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: camera-streaming-platform
+  namespace: camera-streaming
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - redis.yaml
+  - nginx-rtmp.yaml
+  - backend.yaml
+  - ingress.yaml
+  - monitoring.yaml
+
+images:
+  - name: camera-streaming-backend
+    newTag: latest
+
+commonLabels:
+  app.kubernetes.io/name: camera-streaming-platform
+  app.kubernetes.io/version: "1.0.0"
+  app.kubernetes.io/component: multi-camera-streaming
+  app.kubernetes.io/part-of: camera-streaming-platform
+  app.kubernetes.io/managed-by: kustomize
+
+patchesStrategicMerge:
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: camera-streaming-backend
+      namespace: camera-streaming
+    spec:
+      template:
+        metadata:
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "3000"
+            prometheus.io/path: "/monitoring/prometheus"
+
+configMapGenerator:
+  - name: app-version
+    literals:
+      - VERSION=1.0.0
+      - BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      - GIT_COMMIT=latest
+
+secretGenerator:
+  - name: tls-certs
+    type: kubernetes.io/tls
+    files:
+      - tls.crt=certs/tls.crt
+      - tls.key=certs/tls.key
+
+replicas:
+  - name: camera-streaming-backend
+    count: 3
+  - name: nginx-rtmp
+    count: 2
+
+patches:
+  - target:
+      kind: Deployment
+      name: camera-streaming-backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DEPLOYMENT_ENV
+          value: kubernetes
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace

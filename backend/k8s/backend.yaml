@@ -1,0 +1,208 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-storage-pvc
+  namespace: camera-streaming
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-logs-pvc
+  namespace: camera-streaming
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: camera-streaming-backend
+  namespace: camera-streaming
+  labels:
+    app: camera-streaming-backend
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: camera-streaming-backend
+  template:
+    metadata:
+      labels:
+        app: camera-streaming-backend
+        component: api
+    spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:15-alpine
+        command:
+        - sh
+        - -c
+        - |
+          until pg_isready -h postgres-service -p 5432 -U postgres; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+      - name: wait-for-redis
+        image: redis:7-alpine
+        command:
+        - sh
+        - -c
+        - |
+          until redis-cli -h redis-service -p 6379 -a $REDIS_PASSWORD ping; do
+            echo "Waiting for Redis..."
+            sleep 2
+          done
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: REDIS_PASSWORD
+      - name: run-migrations
+        image: camera-streaming-backend:latest
+        command:
+        - npm
+        - run
+        - migration:run
+        envFrom:
+        - configMapRef:
+            name: camera-streaming-config
+        - secretRef:
+            name: camera-streaming-secrets
+        volumeMounts:
+        - name: storage
+          mountPath: /app/storage
+        - name: logs
+          mountPath: /app/logs
+      containers:
+      - name: backend
+        image: camera-streaming-backend:latest
+        ports:
+        - containerPort: 3000
+        envFrom:
+        - configMapRef:
+            name: camera-streaming-config
+        - secretRef:
+            name: camera-streaming-secrets
+        volumeMounts:
+        - name: storage
+          mountPath: /app/storage
+        - name: logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 10
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: backend-storage-pvc
+      - name: logs
+        persistentVolumeClaim:
+          claimName: backend-logs-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: camera-streaming-backend
+  namespace: camera-streaming
+  labels:
+    app: camera-streaming-backend
+    component: api
+spec:
+  selector:
+    app: camera-streaming-backend
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: camera-streaming
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: camera-streaming-backend
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: camera-streaming
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: camera-streaming-backend

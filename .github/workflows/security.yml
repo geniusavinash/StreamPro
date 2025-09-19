@@ -1,0 +1,380 @@
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 2 AM
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install dependencies (Backend)
+      working-directory: ./backend
+      run: npm ci
+
+    - name: Install dependencies (Frontend)
+      working-directory: ./frontend
+      run: npm ci
+
+    - name: Run npm audit (Backend)
+      working-directory: ./backend
+      run: |
+        npm audit --audit-level moderate --json > backend-audit.json || true
+        npm audit --audit-level moderate
+
+    - name: Run npm audit (Frontend)
+      working-directory: ./frontend
+      run: |
+        npm audit --audit-level moderate --json > frontend-audit.json || true
+        npm audit --audit-level moderate
+
+    - name: Upload audit results
+      uses: actions/upload-artifact@v3
+      with:
+        name: audit-results
+        path: |
+          backend/backend-audit.json
+          frontend/frontend-audit.json
+
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: |
+        cd backend
+        docker build -t camera-streaming-backend:security-scan .
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'camera-streaming-backend:security-scan'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Trivy vulnerability scanner (JSON output)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'camera-streaming-backend:security-scan'
+        format: 'json'
+        output: 'trivy-results.json'
+
+    - name: Check for critical vulnerabilities
+      run: |
+        CRITICAL_COUNT=$(cat trivy-results.json | jq '.Results[]?.Vulnerabilities // [] | map(select(.Severity == "CRITICAL")) | length')
+        HIGH_COUNT=$(cat trivy-results.json | jq '.Results[]?.Vulnerabilities // [] | map(select(.Severity == "HIGH")) | length')
+        
+        echo "Critical vulnerabilities: $CRITICAL_COUNT"
+        echo "High vulnerabilities: $HIGH_COUNT"
+        
+        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+          echo "❌ Found $CRITICAL_COUNT critical vulnerabilities"
+          exit 1
+        fi
+        
+        if [ "$HIGH_COUNT" -gt 10 ]; then
+          echo "⚠️ Found $HIGH_COUNT high vulnerabilities (threshold: 10)"
+          exit 1
+        fi
+
+    - name: Upload container scan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: container-scan-results
+        path: trivy-results.json
+
+  code-security-scan:
+    name: Code Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: javascript, typescript
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+
+    - name: Run Semgrep
+      uses: returntocorp/semgrep-action@v1
+      with:
+        config: >-
+          p/security-audit
+          p/secrets
+          p/owasp-top-ten
+          p/nodejs
+        generateSarif: "1"
+
+    - name: Upload Semgrep results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: semgrep.sarif
+
+  secrets-scan:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+    - name: Run GitLeaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  infrastructure-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: kubernetes,dockerfile
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+
+    - name: Upload Checkov scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: checkov-results.sarif
+
+    - name: Run Terrascan
+      uses: tenable/terrascan-action@main
+      with:
+        iac_type: 'k8s'
+        iac_dir: 'backend/k8s'
+        policy_type: 'k8s'
+        only_warn: true
+        sarif_upload: true
+
+  license-scan:
+    name: License Compliance Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install license-checker
+      run: npm install -g license-checker
+
+    - name: Check backend licenses
+      working-directory: ./backend
+      run: |
+        npm ci
+        license-checker --json --out backend-licenses.json
+        license-checker --summary
+
+    - name: Check frontend licenses
+      working-directory: ./frontend
+      run: |
+        npm ci
+        license-checker --json --out frontend-licenses.json
+        license-checker --summary
+
+    - name: Check for prohibited licenses
+      run: |
+        # List of prohibited licenses
+        PROHIBITED_LICENSES="GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0"
+        
+        # Check backend
+        if grep -E "$PROHIBITED_LICENSES" backend/backend-licenses.json; then
+          echo "❌ Prohibited licenses found in backend dependencies"
+          exit 1
+        fi
+        
+        # Check frontend
+        if grep -E "$PROHIBITED_LICENSES" frontend/frontend-licenses.json; then
+          echo "❌ Prohibited licenses found in frontend dependencies"
+          exit 1
+        fi
+        
+        echo "✅ No prohibited licenses found"
+
+    - name: Upload license reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: license-reports
+        path: |
+          backend/backend-licenses.json
+          frontend/frontend-licenses.json
+
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, container-scan, code-security-scan, secrets-scan, infrastructure-scan, license-scan]
+    if: always()
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Generate security report
+      run: |
+        cat > security-report.md << 'EOF'
+        # Security Scan Report
+        
+        **Date:** $(date)
+        **Repository:** ${{ github.repository }}
+        **Branch:** ${{ github.ref_name }}
+        **Commit:** ${{ github.sha }}
+        
+        ## Summary
+        
+        | Scan Type | Status |
+        |-----------|--------|
+        | Dependency Scan | ${{ needs.dependency-scan.result }} |
+        | Container Scan | ${{ needs.container-scan.result }} |
+        | Code Security Scan | ${{ needs.code-security-scan.result }} |
+        | Secrets Scan | ${{ needs.secrets-scan.result }} |
+        | Infrastructure Scan | ${{ needs.infrastructure-scan.result }} |
+        | License Scan | ${{ needs.license-scan.result }} |
+        
+        ## Recommendations
+        
+        - Review and address any critical or high severity vulnerabilities
+        - Update dependencies with known vulnerabilities
+        - Ensure no secrets are committed to the repository
+        - Follow security best practices for Kubernetes deployments
+        - Regularly update base images and dependencies
+        
+        ## Next Steps
+        
+        1. Review detailed scan results in the GitHub Security tab
+        2. Create issues for any critical findings
+        3. Update security documentation if needed
+        4. Schedule regular security reviews
+        
+        EOF
+
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: security-report.md
+
+    - name: Comment on PR (if applicable)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const report = fs.readFileSync('security-report.md', 'utf8');
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: report
+          });
+
+  notify-security-team:
+    name: Notify Security Team
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, container-scan, code-security-scan, secrets-scan, infrastructure-scan]
+    if: failure() && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Send security alert
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        channel: '#security-alerts'
+        text: |
+          🚨 Security scan failed for main branch
+          
+          Repository: ${{ github.repository }}
+          Commit: ${{ github.sha }}
+          
+          Failed scans:
+          ${{ needs.dependency-scan.result == 'failure' && '- Dependency Scan' || '' }}
+          ${{ needs.container-scan.result == 'failure' && '- Container Scan' || '' }}
+          ${{ needs.code-security-scan.result == 'failure' && '- Code Security Scan' || '' }}
+          ${{ needs.secrets-scan.result == 'failure' && '- Secrets Scan' || '' }}
+          ${{ needs.infrastructure-scan.result == 'failure' && '- Infrastructure Scan' || '' }}
+          
+          Please review the security findings immediately.
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+
+    - name: Create security issue
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `Security scan failure - ${new Date().toISOString().split('T')[0]}`,
+            body: `
+            ## Security Scan Failure
+            
+            One or more security scans have failed for the main branch.
+            
+            **Commit:** ${context.sha}
+            **Workflow:** ${context.workflow}
+            **Run ID:** ${context.runId}
+            
+            ### Failed Scans
+            
+            Please review the workflow logs and address any security issues found.
+            
+            ### Action Items
+            
+            - [ ] Review scan results
+            - [ ] Address critical vulnerabilities
+            - [ ] Update dependencies if needed
+            - [ ] Verify no secrets are exposed
+            - [ ] Update security documentation
+            
+            **Priority:** High
+            `,
+            labels: ['security', 'bug', 'high-priority']
+          });
