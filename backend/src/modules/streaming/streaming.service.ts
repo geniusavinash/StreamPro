@@ -43,7 +43,7 @@ export class StreamingService {
       const streamKey = `${cameraId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       // Get server configuration
-      const rtmpHost = process.env.RTMP_HOST || 'api.getfairplay.org';
+      const rtmpHost = process.env.RTMP_HOST || 'localhost';
       const rtmpPort = process.env.RTMP_PORT || '1935';
       
       // Generate URLs

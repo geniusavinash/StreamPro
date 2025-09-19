@@ -10,8 +10,8 @@ export default registerAs('app', () => ({
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret',
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
   // Streaming base URLs used for RTMP publish and HLS playback
-  rtmpBaseUrl: process.env.RTMP_BASE_URL || 'rtmp://api.getfairplay.org:1935/live',
-  hlsBaseUrl: process.env.HLS_BASE_URL || 'https://api.getfairplay.org/hls',
+  rtmpBaseUrl: process.env.RTMP_BASE_URL || 'rtmp://localhost:1935/live',
+  hlsBaseUrl: process.env.HLS_BASE_URL || 'http://localhost:8080/hls',
   // FFmpeg binary path (set to full path on Windows like C:\\ffmpeg\\bin\\ffmpeg.exe)
   ffmpegPath: process.env.FFMPEG_PATH || '/usr/bin/ffmpeg',
 }));

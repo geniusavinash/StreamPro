@@ -58,8 +58,7 @@ async function bootstrap() {
     .setVersion('1.0')
     .setContact('Support Team', 'https://example.com/support', 'support@example.com')
     .setLicense('MIT', 'https://opensource.org/licenses/MIT')
-    .addServer('https://api.getfairplay.org/api/v1', 'Development Server')
-    .addServer('https://api.getfairplay.org/api/v1', 'Production Server')
+    .addServer('http://localhost:3000/api/v1', 'Local Development Server')
     .addBearerAuth(
       {
         type: 'http',
@@ -121,7 +120,7 @@ async function bootstrap() {
 
   console.log(`🚀 Application is running on: http://localhost:${port}`);
   console.log(`📚 Swagger documentation: http://localhost:${port}/api`);
-  console.log(`🌐 Production API: https://api.getfairplay.org/api/v1`);
+  console.log(`🔧 Development Mode: Local API only`);
 }
 
 bootstrap();

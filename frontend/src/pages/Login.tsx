@@ -16,7 +16,7 @@ const Login: React.FC = () => {
   const { handleError } = useErrorHandler();
 
   const loginMutation = useMutation({
-    mutationFn: (credentials: { username: string; password: string }) => api.auth.login(credentials),
+    mutationFn: (credentials: { username: string; password: string }) => api.login(credentials),
     onSuccess: (data: any) => {
       login(data.accessToken, data.user);
       navigate('/dashboard');

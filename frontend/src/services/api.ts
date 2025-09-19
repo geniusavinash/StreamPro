@@ -10,7 +10,7 @@ import {
 } from '../types';
 // No mock data - all API calls go to real backend
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://api.getfairplay.org/api/v1';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api/v1';
 // Always use real API - no mock data
 
 class ApiService {

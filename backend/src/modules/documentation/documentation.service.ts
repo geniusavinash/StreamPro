@@ -13,8 +13,8 @@ export class DocumentationService {
       },
       servers: [
         {
-          url: 'https://api.getfairplay.org/api/v1',
-          description: 'Development server',
+          url: 'http://localhost:3000/api/v1',
+          description: 'Local development server',
         },
       ],
       // Additional OpenAPI specification would be generated here
@@ -41,7 +41,7 @@ export class DocumentationService {
       variable: [
         {
           key: 'base_url',
-          value: 'https://api.getfairplay.org/api/v1',
+          value: 'http://localhost:3000/api/v1',
           type: 'string',
         },
         {
@@ -139,7 +139,7 @@ export class DocumentationService {
 
 class CameraPlatformSDK {
   constructor(baseUrl, apiKey) {
-    this.baseUrl = baseUrl || 'https://api.getfairplay.org/api/v1';
+    this.baseUrl = baseUrl || 'http://localhost:3000/api/v1';
     this.apiKey = apiKey;
     this.token = null;
   }
@@ -245,7 +245,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // Example usage:
 /*
-const sdk = new CameraPlatformSDK('https://api.getfairplay.org/api/v1');
+const sdk = new CameraPlatformSDK('http://localhost:3000/api/v1');
 
 // Login
 await sdk.login('admin', 'password');
@@ -281,7 +281,7 @@ from urllib.parse import urlencode
 
 
 class CameraPlatformSDK:
-    def __init__(self, base_url: str = "https://api.getfairplay.org/api/v1", api_key: Optional[str] = None):
+    def __init__(self, base_url: str = "http://localhost:3000/api/v1", api_key: Optional[str] = None):
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.token = None
@@ -399,7 +399,7 @@ class CameraPlatformSDK:
 # Example usage:
 if __name__ == "__main__":
     # Initialize SDK
-    sdk = CameraPlatformSDK("https://api.getfairplay.org/api/v1")
+    sdk = CameraPlatformSDK("http://localhost:3000/api/v1")
 
     try:
         # Login

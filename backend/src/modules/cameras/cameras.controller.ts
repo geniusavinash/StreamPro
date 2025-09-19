@@ -375,10 +375,10 @@ export class CamerasController {
     schema: {
       type: 'object',
       properties: {
-        rtmpUrl: { type: 'string', example: 'rtmp://api.getfairplay.org:1935/live/camera_123_1640995200000_abc123' },
+        rtmpUrl: { type: 'string', example: 'rtmp://localhost:1935/live/camera_123_1640995200000_abc123' },
         streamKey: { type: 'string', example: 'camera_123_1640995200000_abc123' },
-        hlsUrl: { type: 'string', example: 'https://api.getfairplay.org/hls/camera_123_1640995200000_abc123/index.m3u8' },
-        dashUrl: { type: 'string', example: 'https://api.getfairplay.org/dash/camera_123_1640995200000_abc123/index.mpd' }
+        hlsUrl: { type: 'string', example: 'http://localhost:8080/hls/camera_123_1640995200000_abc123/index.m3u8' },
+        dashUrl: { type: 'string', example: 'http://localhost:8080/dash/camera_123_1640995200000_abc123/index.mpd' }
       }
     }
   })
