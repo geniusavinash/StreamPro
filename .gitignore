@@ -91,3 +91,18 @@ recordings/
 *.tar.gz
 *.rar
 *.7z
+
+# Test and debug files
+test-*.js
+debug-*.js
+*.test.local.js
+
+# Duplicate documentation files
+*_DUPLICATE.md
+*_OLD.md
+*_BACKUP.md
+
+# Development scripts
+deploy-*.sh
+upload-*.sh
+*.local.sh
