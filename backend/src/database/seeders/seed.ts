@@ -10,15 +10,10 @@ config();
 const configService = new ConfigService();
 
 const dataSource = new DataSource({
-  type: 'mysql',
-  host: configService.get('DB_HOST', 'localhost'),
-  port: configService.get('DB_PORT', 3306),
-  username: configService.get('DB_USERNAME', 'root'),
-  password: configService.get('DB_PASSWORD', ''),
-  database: configService.get('DB_NAME', 'camera_streaming'),
+  type: 'sqlite',
+  database: configService.get('DATABASE_DATABASE', 'camera_streaming.db'),
   entities: [User, Camera, Recording, ApiToken, AuditLog],
   synchronize: true,
-  charset: 'utf8mb4',
 });
 
 async function runSeeders() {
